@@ -440,3 +440,115 @@ if st.session_state.results_df is not None and not st.session_state.results_df.e
             mime="text/csv",
             use_container_width=True,
         )
+
+    # ── Retry Failed URLs ──
+    st.divider()
+    st.subheader("Retry Failed URLs")
+
+    # Option 1: Retry all failed from current results
+    failed_urls = df[df["status_group"].isin(["4xx", "5xx", "Error"])]["input_url"].tolist()
+    if failed_urls:
+        st.markdown(f"**{len(failed_urls)}** failed URL(s) in current results.")
+        if st.button(f"Retry All {len(failed_urls)} Failed URLs", type="primary", use_container_width=True):
+            retry_progress = st.progress(0, text="Retrying failed URLs…")
+
+            def _retry_progress(done: int, total: int) -> None:
+                pct = done / total if total else 1.0
+                retry_progress.progress(pct, text=f"Retrying… {done}/{total}")
+
+            retry_results = run_checks(
+                failed_urls,
+                concurrency=concurrency,
+                timeout=float(timeout),
+                follow_redirects=follow_redirects,
+                head_then_get=head_then_get,
+                retries=retries,
+                user_agent=user_agent,
+                safari_retry=safari_retry,
+                progress_callback=_retry_progress,
+            )
+            retry_progress.progress(1.0, text="Done")
+
+            # Merge retry results back into the main dataframe
+            retry_df = pd.DataFrame(retry_results)
+            original_df = st.session_state.results_df
+            # Remove old rows for retried URLs, append new results
+            kept = original_df[~original_df["input_url"].isin(failed_urls)]
+            st.session_state.results_df = pd.concat([kept, retry_df], ignore_index=True)
+            st.rerun()
+
+    # Option 2: Single URL retry
+    st.markdown("---")
+    retry_url = st.text_input("Retry a single URL", placeholder="https://example.com/page")
+    if retry_url.strip() and st.button("Check URL"):
+        with st.spinner("Checking…"):
+            single_result = run_checks(
+                [retry_url.strip()],
+                concurrency=1,
+                timeout=float(timeout),
+                follow_redirects=follow_redirects,
+                head_then_get=head_then_get,
+                retries=2,
+                user_agent=user_agent,
+                safari_retry=True,
+            )
+        r = single_result[0]
+        st.json(r)
+
+# ──────────────────────────────────────────────────────────────
+# Re-check from uploaded CSV (always visible)
+# ──────────────────────────────────────────────────────────────
+st.divider()
+st.subheader("Re-check URLs from CSV")
+st.caption("Upload a previously downloaded failures CSV (or any CSV with an `input_url` column) to re-check those URLs.")
+
+recheck_csv = st.file_uploader("Upload CSV to re-check", type=["csv"], key="recheck_csv")
+
+if recheck_csv is not None:
+    try:
+        recheck_df = pd.read_csv(recheck_csv)
+        url_col = None
+        for candidate in ["input_url", "url", "URL", "loc"]:
+            if candidate in recheck_df.columns:
+                url_col = candidate
+                break
+        if url_col is None:
+            st.error("CSV must have a column named `input_url`, `url`, or `loc`.")
+        else:
+            recheck_urls = recheck_df[url_col].dropna().unique().tolist()
+            st.info(f"Found **{len(recheck_urls)}** URLs in the CSV.")
+
+            if st.button(f"Re-check {len(recheck_urls)} URLs", type="primary", use_container_width=True):
+                recheck_progress = st.progress(0, text="Re-checking URLs…")
+
+                def _recheck_progress(done: int, total: int) -> None:
+                    pct = done / total if total else 1.0
+                    recheck_progress.progress(pct, text=f"Re-checking… {done}/{total}")
+
+                recheck_results = run_checks(
+                    recheck_urls,
+                    concurrency=concurrency,
+                    timeout=float(timeout),
+                    follow_redirects=follow_redirects,
+                    head_then_get=head_then_get,
+                    retries=retries,
+                    user_agent=user_agent,
+                    safari_retry=safari_retry,
+                    progress_callback=_recheck_progress,
+                )
+                recheck_progress.progress(1.0, text="Done")
+
+                st.session_state.urls = recheck_urls
+                st.session_state.results_df = pd.DataFrame(recheck_results)
+                st.session_state.sitemap_source = f"CSV re-check ({recheck_csv.name})"
+
+                # Auto-save
+                settings_used = {
+                    "concurrency": concurrency, "timeout": timeout,
+                    "follow_redirects": follow_redirects, "head_then_get": head_then_get,
+                    "retries": retries, "user_agent": user_agent, "safari_retry": safari_retry,
+                }
+                save_run(source=st.session_state.sitemap_source, results=recheck_results, settings=settings_used)
+                st.rerun()
+    except Exception as e:
+        st.error(f"Error reading CSV: {e}")
