@@ -12,6 +12,7 @@ import pandas as pd
 from sitemap import parse_sitemap
 from checker import run_checks
 from headers import UA_PRESETS
+from run_store import save_run, list_runs, load_run, delete_run
 
 # ──────────────────────────────────────────────────────────────
 # Page config
@@ -143,6 +144,38 @@ with st.sidebar:
     st.caption(f"Outbound IP: **{_get_outbound_ip()}**")
     st.caption("_If results differ from your browser, your app may be on a different IP/region._")
 
+    # ── Saved Runs ──
+    st.divider()
+    st.subheader("Saved Runs")
+    saved_runs = list_runs()
+    if saved_runs:
+        run_labels = {
+            r["id"]: f"{r['timestamp']}  •  {r['url_count']} URLs  •  {r['source'][:40]}"
+            for r in saved_runs
+        }
+        selected_run_id = st.selectbox(
+            "Select a run",
+            options=[""] + list(run_labels.keys()),
+            format_func=lambda x: "— choose —" if x == "" else run_labels[x],
+            label_visibility="collapsed",
+        )
+
+        btn_col1, btn_col2 = st.columns(2)
+        with btn_col1:
+            if st.button("Load Run", use_container_width=True, disabled=not selected_run_id):
+                run_data = load_run(selected_run_id)
+                if run_data:
+                    st.session_state.results_df = pd.DataFrame(run_data["results"])
+                    st.session_state.sitemap_source = run_data.get("source", "")
+                    st.session_state.urls = [r["input_url"] for r in run_data["results"]]
+                    st.rerun()
+        with btn_col2:
+            if st.button("Delete", use_container_width=True, disabled=not selected_run_id):
+                delete_run(selected_run_id)
+                st.rerun()
+    else:
+        st.caption("_No saved runs yet. Runs are saved automatically after each check._")
+
 # ──────────────────────────────────────────────────────────────
 # Input section
 # ──────────────────────────────────────────────────────────────
@@ -171,6 +204,8 @@ if "urls" not in st.session_state:
     st.session_state.urls = []
 if "results_df" not in st.session_state:
     st.session_state.results_df = None
+if "sitemap_source" not in st.session_state:
+    st.session_state.sitemap_source = ""
 
 # ──────────────────────────────────────────────────────────────
 # Parse sitemap
@@ -187,8 +222,10 @@ if st.button("Parse Sitemap", type="primary", width="stretch"):
         if uploaded is not None:
             raw = uploaded.read()
             urls = parse_sitemap(raw, user_agent=user_agent, progress_callback=_log)
+            st.session_state.sitemap_source = uploaded.name
         elif sitemap_url.strip():
             urls = parse_sitemap(sitemap_url.strip(), user_agent=user_agent, progress_callback=_log)
+            st.session_state.sitemap_source = sitemap_url.strip()
         else:
             st.warning("Please upload a file **or** enter a URL first.")
             urls = []
@@ -236,7 +273,25 @@ if st.session_state.urls:
         )
 
         progress_bar.progress(1.0, text="Done")
-        st.session_state.results_df = pd.DataFrame(results)
+        results_df = pd.DataFrame(results)
+        st.session_state.results_df = results_df
+
+        # ── Auto-save the run ──
+        settings_used = {
+            "concurrency": concurrency,
+            "timeout": timeout,
+            "follow_redirects": follow_redirects,
+            "head_then_get": head_then_get,
+            "retries": retries,
+            "user_agent": user_agent,
+            "safari_retry": safari_retry,
+        }
+        run_id = save_run(
+            source=st.session_state.sitemap_source or "unknown",
+            results=results,
+            settings=settings_used,
+        )
+        st.toast(f"Run saved (ID: {run_id})")
 
 # ──────────────────────────────────────────────────────────────
 # Results display
