@@ -108,7 +108,7 @@ with st.sidebar:
     st.header("Options")
 
     concurrency = st.slider("Concurrency", 1, 50, 10)
-    timeout = st.number_input("Timeout (seconds)", min_value=1, max_value=120, value=15)
+    timeout = st.number_input("Timeout (seconds)", min_value=1, max_value=120, value=30)
     follow_redirects = st.checkbox("Follow redirects", value=True)
     head_then_get = st.checkbox("HEAD then GET fallback", value=True)
     retries = st.slider("Retry count", 0, 2, 1)
